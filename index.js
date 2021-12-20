@@ -41,18 +41,48 @@ function _appendQueryParam(url, param, value) {
   return result;
 }
 
-function SoundCloud(clientId, apiUrl) {
+function _getAccessToken(clientId, clientSecret, callback) {
+  var xhr = new XMLHttpRequest();
+
+  var oauthUrl = SOUNDCLOUD_API_URL + "/oauth2/token";
+
+  var data = new FormData();
+  data.append("client_id", clientId);
+  data.append("client_secret", clientSecret);
+  data.append("grant_type", "client_credentials");
+
+
+  xhr.open('POST', oauthUrl);
+  xhr.onreadystatechange = function() {
+    if (xhr.readyState === 4) {
+      if (xhr.status === 200) {
+        var resp = {};
+        try {
+          resp = JSON.parse(xhr.responseText);
+        } catch (err) {
+          // fail silently
+        }
+        callback(resp);
+      }
+    }
+  };
+
+  xhr.send(data);
+}
+
+function SoundCloud(clientId, clientSecret, apiUrl) {
   if (!(this instanceof SoundCloud)) {
     return new SoundCloud(clientId, apiUrl);
   }
 
-  if (!clientId && !apiUrl) {
-    console.info('SoundCloud API requires clientId or custom apiUrl');
+  if (!(clientId && clientSecret) && !apiUrl) {
+    console.info('SoundCloud API requires clientId with clientSecret or custom apiUrl');
   }
 
   this._events = {};
 
   this._clientId = clientId;
+  this._clientSecret = clientSecret;
   this._baseUrl = apiUrl || SOUNDCLOUD_API_URL;
 
   this.playing = false;
@@ -62,14 +92,11 @@ function SoundCloud(clientId, apiUrl) {
 }
 
 SoundCloud.prototype.resolve = function(url, callback) {
-  var resolveUrl =
-    this._baseUrl + '/resolve.json?url=' + encodeURIComponent(url);
+  var resolveUrl = url;
+    //this._baseUrl + '/resolve.json?url=' + encodeURIComponent(url);
 
-  if (this._clientId) {
-    resolveUrl = _appendQueryParam(resolveUrl, 'client_id', this._clientId);
-  }
 
-  this._json(
+  this._authAndJson(
     resolveUrl,
     function(data) {
       this.cleanData();
@@ -118,11 +145,31 @@ SoundCloud.prototype._jsonp = function(url, callback) {
   target.parentNode.insertBefore(script, target);
 };
 
+
+SoundCloud.prototype._authAndJson = function(url, callback) {
+  if (this._accessToken != null) {
+    this._json(url, callback)
+  } else {
+    let scObj = this;
+    console.log("getting access token!");
+    _getAccessToken(this._clientId, this._clientSecret, function(response) {
+      console.log(response.access_token)
+      scObj._accessToken = response.access_token;
+      console.log("got access token!");
+      scObj._json(url, callback)
+    });
+  }
+
+
+}
+
 SoundCloud.prototype._json = function(url, callback) {
   var xhr = new XMLHttpRequest();
 
   xhr.open('GET', url);
+  xhr.setRequestHeader("Authorization", `OAuth ${this._accessToken}`)
   xhr.onreadystatechange = function() {
+    console.log("DONE!")
     if (xhr.readyState === 4) {
       if (xhr.status === 200) {
         var resp = {};
@@ -132,6 +179,9 @@ SoundCloud.prototype._json = function(url, callback) {
           // fail silently
         }
         callback(resp);
+      } else {
+        console.log('non 200 status!')
+        console.log(xhr)
       }
     }
   };
@@ -177,9 +227,7 @@ SoundCloud.prototype.preload = function(streamUrl, preloadType) {
     this.audio.preload = preloadType;
   }
 
-  this.audio.src = this._clientId
-    ? _appendQueryParam(streamUrl, 'client_id', this._clientId)
-    : streamUrl;
+  this.audio.src = streamUrl;
 };
 
 SoundCloud.prototype.play = function(options) {
@@ -214,10 +262,6 @@ SoundCloud.prototype.play = function(options) {
     throw new Error(
       'There is no tracks to play, use `streamUrl` option or `load` method'
     );
-  }
-
-  if (this._clientId) {
-    src = _appendQueryParam(src, 'client_id', this._clientId);
   }
 
   if (src !== this.audio.src) {
